@@ -5,15 +5,16 @@
 
 from __future__ import print_function
 import RPi.GPIO as GPIO
-import sys, os, random, getopt, re
-import subprocess, time, Image, socket
+import signal, sys, os, random, getopt, re
+import commands, subprocess, time, socket
+from PIL import Image
 from Adafruit_Thermal import *
 
 ledPin       = 18
 buttonPin    = 23
 holdTime     = 2     # Duration for button hold (shutdown)
 tapTime      = 0.01  # Debounce time for button taps
-printer      = Adafruit_Thermal("/dev/ttyAMA0", 19200, timeout=5)
+printer      = Adafruit_Thermal("/dev/serial0", 19200, timeout=5)
 printer.setLineHeight(23) # So graphical chars fit together
 
 # Called when button is briefly tapped.  Prints one copy of the OTP.
@@ -22,7 +23,7 @@ def tap():
   otp = file("/ramdisk/otp.txt")
   printer.feed(3)
   for line in otp:
-    printer.println(line)  
+    printer.println(line)
   printer.feed(3)
   file.close(otp)
   GPIO.output(ledPin, GPIO.LOW)
@@ -33,7 +34,22 @@ def hold():
   subprocess.call(["shutdown", "-h", "now"])
   GPIO.output(ledPin, GPIO.LOW)
 
+def sigterm_handler(signal, frame):
+  raise(SystemExit)
+
 # Initialization
+signal.signal(signal.SIGTERM, sigterm_handler)
+
+# Processor load is heavy at startup; wait a moment to avoid
+# stalling during greeting.
+time.sleep(30)
+
+status, output = commands.getstatusoutput("sudo /home/pi/otp-gen/otp.sh")
+if status != 0:
+  printer.println(time.strftime("[%d-%m-%Y|%H:%M:%S]"))
+  printer.println('ERROR GENERATING OTP FILE')
+  printer.println('PROCESS TERMINATED')
+  exit()
 
 # Use Broadcom pin numbers (not Raspberry Pi pin numbers) for GPIO
 GPIO.setmode(GPIO.BCM)
@@ -45,9 +61,7 @@ GPIO.setup(buttonPin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 # LED on while working
 GPIO.output(ledPin, GPIO.HIGH)
 
-# Processor load is heavy at startup; wait a moment to avoid
-# stalling during greeting.
-time.sleep(30)
+printer.println(time.strftime("[%d-%m-%Y|%H:%M:%S]") + " STARTING...")
 
 # Show IP address (if network is available)
 try:
@@ -69,7 +83,7 @@ printer.println('copy of the keying materials.')
 printer.println('Then, securely erase everything.')
 
 # Print greeting image
-printer.printImage(Image.open('gfx/hello.png'), True)
+printer.printImage(Image.open('/home/pi/otp-gen/gfx/hello.png'), True)
 printer.feed(3)
 GPIO.output(ledPin, GPIO.LOW)
 
@@ -81,37 +95,45 @@ holdEnable      = False
 
 # Main loop
 while(True):
-  # Poll current button state and time
-  buttonState = GPIO.input(buttonPin)
-  t           = time.time()
+  try:
+    # Poll current button state and time
+    buttonState = GPIO.input(buttonPin)
+    t = time.time()
 
-  # Has button state changed?
-  if buttonState != prevButtonState:
-    prevButtonState = buttonState   # Yes, save new state/time
-    prevTime        = t
-  else:                             # Button state unchanged
-    if (t - prevTime) >= holdTime:  # Button held more than 'holdTime'?
-      # Yes it has.  Is the hold action as-yet untriggered?
-      if holdEnable == True:        # Yep!
-        hold()                      # Perform hold action (usu. shutdown)
-        holdEnable = False          # 1 shot...don't repeat hold action
-        tapEnable  = False          # Don't do tap action on release
-    elif (t - prevTime) >= tapTime: # Not holdTime.  tapTime elapsed?
-      # Yes.  Debounced press or release...
-      if buttonState == True:       # Button released?
-        if tapEnable == True:       # Ignore if prior hold()
-          tap()                     # Tap triggered (button released)
-          tapEnable  = False        # Disable tap and hold
-          holdEnable = False
-      else:                         # Button pressed
-        tapEnable  = True           # Enable tap and hold actions
-        holdEnable = True
+    # Has button state changed?
+    if buttonState != prevButtonState:
+      prevButtonState = buttonState   # Yes, save new state/time
+      prevTime        = t
+    else:                             # Button state unchanged
+      if (t - prevTime) >= holdTime:  # Button held more than 'holdTime'?
+        # Yes it has.  Is the hold action as-yet untriggered?
+        if holdEnable == True:        # Yep!
+          hold()                      # Perform hold action (usu. shutdown)
+          holdEnable = False          # 1 shot...don't repeat hold action
+          tapEnable  = False          # Don't do tap action on release
+      elif (t - prevTime) >= tapTime: # Not holdTime.  tapTime elapsed?
+        # Yes.  Debounced press or release...
+        if buttonState == True:       # Button released?
+          if tapEnable == True:       # Ignore if prior hold()
+            tap()                     # Tap triggered (button released)
+            tapEnable  = False        # Disable tap and hold
+            holdEnable = False
+        else:                         # Button pressed
+          tapEnable  = True           # Enable tap and hold actions
+          holdEnable = True
 
-  # LED blinks while idle, for a brief interval every 2 seconds.
-  # Pin 18 is PWM-capable and a "sleep throb" would be nice, but
-  # the PWM-related library is a hassle for average users to install
-  # right now.  Might return to this later when it's more accessible.
-  if ((int(t) & 1) == 0) and ((t - int(t)) < 0.15):
-    GPIO.output(ledPin, GPIO.HIGH)
-  else:
-    GPIO.output(ledPin, GPIO.LOW)
+    # LED blinks while idle, for a brief interval every 2 seconds.
+    # Pin 18 is PWM-capable and a "sleep throb" would be nice, but
+    # the PWM-related library is a hassle for average users to install
+    # right now.  Might return to this later when it's more accessible.
+    if ((int(t) & 1) == 0) and ((t - int(t)) < 0.15):
+      GPIO.output(ledPin, GPIO.HIGH)
+    else:
+      GPIO.output(ledPin, GPIO.LOW)
+  except:
+    printer.println(time.strftime("[%d-%m-%Y|%H:%M:%S]"))
+    printer.println('EXCEPTION OCURRED')
+    printer.println('TERMINATING...')
+    break
+
+GPIO.cleanup()

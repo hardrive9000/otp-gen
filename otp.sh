@@ -6,11 +6,25 @@ pagecount=10
 otpath='/ramdisk/otp.txt'
 bookserial=`base64 /dev/random | tr -d '+/\r\n0-9a-z' | head -c 10`
 
-mkfs -q /dev/ram1 1024
-mkdir -p /ramdisk
-mount /dev/ram1 /ramdisk
+fsram=`file -s /dev/ram1 | cut -f5 -d " "`
+if [ "$fsram" != "ext2" ]; then
+  mkfs -q /dev/ram1 1024
+fi
 
-rm $otpath
+if [ ! -d "/ramdisk/" ]; then
+  mkdir -p /ramdisk
+fi
+
+findmnt --source "/dev/ram1" > /dev/null
+status=$?
+if test $status -ne 0; then
+  mount /dev/ram1 /ramdisk
+fi
+
+if [ -f "$otpath" ]; then
+  rm $otpath
+fi
+
 for ((x=1; x<=$pagecount; x++))
 do  
   echo -n $bookserial >> $otpath;

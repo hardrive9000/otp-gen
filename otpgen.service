@@ -1,0 +1,11 @@
+[Unit]
+Description=OTP Generator Service
+After=multi-user.target
+
+[Service]
+Type=simple
+Restart=always
+ExecStart=/usr/bin/python /home/pi/otp-gen/otp.py
+
+[Install]
+WantedBy=multi-user.target
